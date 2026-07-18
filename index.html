@@ -141,7 +141,7 @@
 <body>
 <header>
   <h1>ウソ法廷<small>FACE PUNISH LAB</small></h1>
-  <span class="ver" id="ver">v0.2.0</span>
+  <span class="ver" id="ver">v0.3.0</span>
 </header>
 
 <div class="stage" id="stage">
@@ -391,8 +391,119 @@ function rr(c,x,y,w,h,r){
   c.closePath();
 }
 
-/* ===== 鼻伸びの刑: 肌色サンプリングした陰影付き円錐 ===== */
+/* ===== 鼻伸びの刑 v0.3: WebGL逆写像ワープ ===== */
+let glState=null;
+function initNoseGL(){
+  if(glState) return glState;
+  const cv=document.createElement("canvas");
+  const gl=cv.getContext("webgl",{preserveDrawingBuffer:true});
+  if(!gl) return null;
+  const vs=`attribute vec2 aPos; varying vec2 vUv;
+    void main(){ vUv=aPos; gl_Position=vec4(aPos.x*2.0-1.0, 1.0-aPos.y*2.0, 0.0, 1.0); }`;
+  const fs=`precision highp float;
+    uniform sampler2D uTex; uniform vec2 uRes;
+    uniform vec2 uB; uniform vec2 uDir;
+    uniform float uL0,uL1,uW0,uW1;
+    varying vec2 vUv;
+    void main(){
+      vec2 p=vUv*uRes;
+      vec2 perp=vec2(-uDir.y,uDir.x);
+      vec2 rel=p-uB;
+      float s=dot(rel,uDir);
+      float q=dot(rel,perp);
+      vec2 src=p;
+      float shade=1.0;
+      float over=max(s-uL1,0.0);
+      float t=clamp(s/uL1,0.0,1.0);
+      float w=mix(uW0,uW1,t);
+      float capW=(over>0.0)? sqrt(max(uW1*uW1-over*over,0.0)) : w;
+      float aq=abs(q);
+      if(s>0.0 && s<uL1+uW1 && aq<capW+3.0){
+        /* 鼻カプセル内: 元の鼻区間を圧縮参照して引き伸ばす */
+        float sSrc=t*uL0 + over*(uL0/uL1);
+        float qSrc=q*mix(1.0,1.3,t);
+        vec2 warped=uB+uDir*sSrc+perp*qSrc;
+        float edge=smoothstep(capW+3.0,capW-1.5,aq);
+        float head=smoothstep(0.0,uW0*0.8,s);
+        float m=edge*head;
+        src=mix(p,warped,m);
+        /* 円柱の陰影 */
+        float lat=aq/max(capW,1.0);
+        float cyl=mix(1.10,0.70,pow(lat,1.6));
+        shade=mix(1.0,cyl,m);
+        /* 先端ハイライト */
+        float tipD=distance(p,uB+uDir*uL1);
+        shade+=m*0.15*exp(-tipD*tipD/(uW1*uW1));
+      } else if(s>0.0 && s<uL1+uW1*2.0 && aq<capW+uW0*0.5){
+        /* 鼻のすぐ外側: 接地影 */
+        shade=1.0-0.22*(1.0-smoothstep(capW, capW+uW0*0.5, aq));
+      }
+      vec4 col=texture2D(uTex, clamp(src/uRes, vec2(0.0), vec2(1.0)));
+      gl_FragColor=vec4(col.rgb*shade,1.0);
+    }`;
+  const mk=(type,code)=>{
+    const o=gl.createShader(type);
+    gl.shaderSource(o,code); gl.compileShader(o);
+    if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))
+      throw new Error(gl.getShaderInfoLog(o));
+    return o;
+  };
+  const prog=gl.createProgram();
+  gl.attachShader(prog,mk(gl.VERTEX_SHADER,vs));
+  gl.attachShader(prog,mk(gl.FRAGMENT_SHADER,fs));
+  gl.linkProgram(prog);
+  if(!gl.getProgramParameter(prog,gl.LINK_STATUS))
+    throw new Error(gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+  const buf=gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([0,0, 1,0, 0,1, 1,1]),gl.STATIC_DRAW);
+  const loc=gl.getAttribLocation(prog,"aPos");
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+  const tex=gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D,tex);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  const u=n=>gl.getUniformLocation(prog,n);
+  glState={cv,gl,uniforms:{res:u("uRes"),B:u("uB"),dir:u("uDir"),
+           L0:u("uL0"),L1:u("uL1"),W0:u("uW0"),W1:u("uW1")}};
+  return glState;
+}
+
 function fxNose(k){
+  let st=null;
+  try{ st=initNoseGL(); }catch(e){ log("WebGL初期化失敗→2D方式","err"); st=null; }
+  if(!st) return fxNoseFallback(k)+" (2Dフォールバック)";
+  const {cv,gl,uniforms}=st;
+  const tip=P(1), nasion=P(168);
+  const eyeIn=dist(P(133),P(362));
+  let dir={x:tip.x-nasion.x, y:tip.y-nasion.y};
+  const dl=Math.hypot(dir.x,dir.y)||1;
+  dir={x:dir.x/dl, y:dir.y/dl};
+  const B={x:nasion.x+dir.x*dl*0.22, y:nasion.y+dir.y*dl*0.22};
+  const L0=Math.hypot(tip.x-B.x,tip.y-B.y)*1.08;
+  const L1=L0*(1.0+0.55*k);
+  const W0=eyeIn*0.27, W1=W0*0.55;
+  cv.width=canvas.width; cv.height=canvas.height;
+  gl.viewport(0,0,cv.width,cv.height);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,canvas);
+  gl.uniform2f(uniforms.res,cv.width,cv.height);
+  gl.uniform2f(uniforms.B,B.x,B.y);
+  gl.uniform2f(uniforms.dir,dir.x,dir.y);
+  gl.uniform1f(uniforms.L0,L0);
+  gl.uniform1f(uniforms.L1,L1);
+  gl.uniform1f(uniforms.W0,W0);
+  gl.uniform1f(uniforms.W1,W1);
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+  ctx.drawImage(cv,0,0);
+  return `鼻が ${Math.round(L1-L0)}px 伸長 (WebGL)`;
+}
+
+/* ===== 鼻伸びの刑 2Dフォールバック: 肌色円錐 ===== */
+function fxNoseFallback(k){
   const tip=P(1), nasion=P(168);
   const eyeIn=dist(P(133),P(362));
   const noseW=eyeIn*0.5;
@@ -739,7 +850,7 @@ $("btnSave").onclick=()=>{
   },"image/png");
 };
 
-log("v0.2.0 起動完了。カメラ起動 or 写真選択で開始");
+log("v0.3.0 起動完了。カメラ起動 or 写真選択で開始");
 </script>
 </body>
 </html>
