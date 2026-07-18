@@ -141,7 +141,7 @@
 <body>
 <header>
   <h1>ウソ法廷<small>FACE PUNISH LAB</small></h1>
-  <span class="ver" id="ver">v0.1.0</span>
+  <span class="ver" id="ver">v0.2.0</span>
 </header>
 
 <div class="stage" id="stage">
@@ -373,122 +373,221 @@ function applyWarps(src, warps){
 }
 
 /* ---------- punishments ---------- */
+function faceEllipse(){
+  const xs=lm.map(p=>p.x), ys=lm.map(p=>p.y);
+  const fx0=Math.min(...xs), fx1=Math.max(...xs);
+  const fy0=Math.min(...ys), fy1=Math.max(...ys);
+  return { fcx:(fx0+fx1)/2, fcy:(fy0+fy1)/2,
+           frx:(fx1-fx0)*0.55, fry:(fy1-fy0)*0.60 };
+}
+
+function rr(c,x,y,w,h,r){
+  c.beginPath();
+  c.moveTo(x+r,y);
+  c.arcTo(x+w,y,x+w,y+h,r);
+  c.arcTo(x+w,y+h,x,y+h,r);
+  c.arcTo(x,y+h,x,y,r);
+  c.arcTo(x,y,x+w,y,r);
+  c.closePath();
+}
+
+/* ===== 鼻伸びの刑: 肌色サンプリングした陰影付き円錐 ===== */
 function fxNose(k){
-  const s=k/5;
   const tip=P(1), nasion=P(168);
   const eyeIn=dist(P(133),P(362));
-  const noseW=eyeIn*0.55;
-  const noseH=dist(nasion,tip);
+  const noseW=eyeIn*0.5;
   let dir={x:tip.x-nasion.x, y:tip.y-nasion.y};
   const dl=Math.hypot(dir.x,dir.y)||1;
   dir={x:dir.x/dl, y:dir.y/dl};
-  // extract nose ellipse to offscreen
-  const cxp=mid(nasion,tip);
-  const rx=noseW*0.62, ry=noseH*0.72;
-  const off=document.createElement("canvas");
-  off.width=canvas.width; off.height=canvas.height;
-  const octx=off.getContext("2d");
-  octx.save();
-  octx.beginPath();
-  octx.ellipse(cxp.x,cxp.y,rx,ry,Math.atan2(dir.y,dir.x)-Math.PI/2,0,Math.PI*2);
-  octx.clip();
-  octx.drawImage(canvas,0,0);
-  octx.restore();
-  // smear copies from base to tip
-  const len=noseW*(1.0+2.6*s)*k*0.55 + noseW*0.8;
-  const N=16;
+  const perp={x:-dir.y, y:dir.x};
+
+  // sample skin tone near the nose tip
+  const sx=Math.max(0,Math.round(tip.x-4)), sy=Math.max(0,Math.round(tip.y-4));
+  const smp=ctx.getImageData(sx,sy,8,8).data;
+  let r=0,g=0,b=0,n=0;
+  for(let i=0;i<smp.length;i+=4){ r+=smp[i]; g+=smp[i+1]; b+=smp[i+2]; n++; }
+  r/=n; g/=n; b/=n;
+  const skin=(mul,a=1)=>`rgba(${Math.min(255,Math.round(r*mul))},${Math.min(255,Math.round(g*mul))},${Math.min(255,Math.round(b*mul))},${a})`;
+
+  const len=noseW*(1.2+0.75*k);
+  const baseW=noseW*0.95, tipR=Math.max(3,noseW*0.16);
+  const base={x:tip.x-dir.x*noseW*0.35, y:tip.y-dir.y*noseW*0.35};
+  const end ={x:base.x+dir.x*len, y:base.y+dir.y*len};
+  const bl={x:base.x+perp.x*baseW/2, y:base.y+perp.y*baseW/2};
+  const brp={x:base.x-perp.x*baseW/2, y:base.y-perp.y*baseW/2};
+  const el={x:end.x+perp.x*tipR, y:end.y+perp.y*tipR};
+  const er={x:end.x-perp.x*tipR, y:end.y-perp.y*tipR};
+
   ctx.save();
-  for(let i=0;i<=N;i++){
-    const t=i/N;
-    const px=tip.x+dir.x*len*t - cxp.x;
-    const py=tip.y+dir.y*len*t - cxp.y;
-    const sc=1-0.55*t;
-    ctx.save();
-    ctx.translate(cxp.x+px, cxp.y+py);
-    ctx.scale(sc,sc);
-    ctx.translate(-cxp.x,-cxp.y);
-    ctx.drawImage(off,0,0);
-    ctx.restore();
+  // cone with soft drop shadow
+  ctx.shadowColor="rgba(0,0,0,0.32)";
+  ctx.shadowBlur=noseW*0.35;
+  ctx.shadowOffsetY=noseW*0.14;
+  const grad=ctx.createLinearGradient(bl.x,bl.y,brp.x,brp.y);
+  grad.addColorStop(0,   skin(0.70));
+  grad.addColorStop(0.32,skin(1.02));
+  grad.addColorStop(0.5, skin(1.16));
+  grad.addColorStop(0.68,skin(1.02));
+  grad.addColorStop(1,   skin(0.68));
+  ctx.fillStyle=grad;
+  ctx.beginPath();
+  ctx.moveTo(bl.x,bl.y);
+  ctx.lineTo(el.x,el.y);
+  ctx.quadraticCurveTo(end.x+dir.x*tipR*1.7, end.y+dir.y*tipR*1.7, er.x, er.y);
+  ctx.lineTo(brp.x,brp.y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.shadowColor="transparent"; ctx.shadowBlur=0; ctx.shadowOffsetY=0;
+
+  // faint growth bands along the length
+  ctx.strokeStyle="rgba(60,35,20,0.10)";
+  ctx.lineWidth=Math.max(1,noseW*0.05);
+  for(let i=1;i<=3;i++){
+    const t=i/4;
+    const c={x:base.x+dir.x*len*t, y:base.y+dir.y*len*t};
+    const hw=(baseW/2)*(1-t)+tipR*t;
+    ctx.beginPath();
+    ctx.moveTo(c.x+perp.x*hw, c.y+perp.y*hw);
+    ctx.quadraticCurveTo(c.x-dir.x*hw*0.5, c.y-dir.y*hw*0.5,
+                         c.x-perp.x*hw, c.y-perp.y*hw);
+    ctx.stroke();
   }
-  // tip highlight
-  const tp={x:tip.x+dir.x*len, y:tip.y+dir.y*len};
-  const g=ctx.createRadialGradient(tp.x,tp.y,0,tp.x,tp.y,noseW*0.3);
-  g.addColorStop(0,"rgba(255,230,200,0.35)");
-  g.addColorStop(1,"rgba(255,230,200,0)");
-  ctx.fillStyle=g;
-  ctx.beginPath(); ctx.arc(tp.x,tp.y,noseW*0.3,0,Math.PI*2); ctx.fill();
+  // rounded tip highlight
+  const hp={x:end.x+dir.x*tipR*0.3, y:end.y+dir.y*tipR*0.3};
+  let hg=ctx.createRadialGradient(hp.x,hp.y,0,hp.x,hp.y,tipR*1.4);
+  hg.addColorStop(0,"rgba(255,245,230,0.5)");
+  hg.addColorStop(1,"rgba(255,245,230,0)");
+  ctx.fillStyle=hg;
+  ctx.beginPath(); ctx.arc(hp.x,hp.y,tipR*1.4,0,Math.PI*2); ctx.fill();
+  // base blend shading so the cone reads as growing out of the face
+  let bg=ctx.createRadialGradient(base.x,base.y,0,base.x,base.y,baseW*0.75);
+  bg.addColorStop(0,"rgba(0,0,0,0)");
+  bg.addColorStop(0.8,"rgba(0,0,0,0)");
+  bg.addColorStop(1,"rgba(60,35,20,0.10)");
+  ctx.fillStyle=bg;
+  ctx.beginPath(); ctx.arc(base.x,base.y,baseW*0.75,0,Math.PI*2); ctx.fill();
   ctx.restore();
   return `鼻が ${Math.round(len)}px 伸長`;
 }
 
-function fxLump(k){
-  const faceW=dist(P(234),P(454));
-  const r=faceW*0.17;
-  const anchors=[
-    mid(P(234),P(61)),            // left cheek
-    mid(P(454),P(291)),           // right cheek
-    mid(P(10),P(168)),            // forehead
-    {x:P(152).x, y:P(152).y-r*0.4} // chin
-  ];
-  const warps=[];
-  const n=3+k;
-  for(let i=0;i<n;i++){
-    const a=anchors[i%anchors.length];
-    warps.push({
-      cx:a.x+(Math.random()-0.5)*r*0.8,
-      cy:a.y+(Math.random()-0.5)*r*0.8,
-      r:r*(0.7+Math.random()*0.6),
-      type:"bulge",
-      strength:0.28+0.07*k
-    });
-  }
-  const img=ctx.getImageData(0,0,canvas.width,canvas.height);
-  ctx.putImageData(applyWarps(img,warps),0,0);
-  // bruises
-  const nb=2+Math.floor(k/2);
+/* ===== ボコボコの刑: 強ワープ+腫れハイライト+二層痣+絆創膏 ===== */
+function drawPlaster(x,y,len,rot){
   ctx.save();
-  ctx.globalCompositeOperation="multiply";
-  for(let i=0;i<nb;i++){
-    const a=anchors[(i+1)%anchors.length];
-    const bx=a.x+(Math.random()-0.5)*r, by=a.y+(Math.random()-0.5)*r;
-    const br=r*(0.5+Math.random()*0.4);
-    const g=ctx.createRadialGradient(bx,by,0,bx,by,br);
-    const col=i%2? "150,60,70":"110,70,140";
-    g.addColorStop(0,`rgba(${col},${0.16+0.04*k})`);
-    g.addColorStop(1,`rgba(${col},0)`);
-    ctx.fillStyle=g;
-    ctx.beginPath(); ctx.arc(bx,by,br,0,Math.PI*2); ctx.fill();
+  ctx.translate(x,y); ctx.rotate(rot);
+  const w=len*0.32;
+  ctx.fillStyle="rgba(233,203,160,0.95)";
+  ctx.strokeStyle="rgba(180,150,110,0.9)";
+  ctx.lineWidth=1;
+  rr(ctx,-len/2,-w/2,len,w,w/2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle="rgba(250,240,225,0.95)";
+  rr(ctx,-len*0.18,-w*0.36,len*0.36,w*0.72,2); ctx.fill();
+  ctx.fillStyle="rgba(180,150,110,0.5)";
+  for(let i=-1;i<=1;i++){
+    ctx.beginPath(); ctx.arc(-len*0.35, i*w*0.2, Math.max(0.6,len*0.012),0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc( len*0.35, i*w*0.2, Math.max(0.6,len*0.012),0,Math.PI*2); ctx.fill();
   }
   ctx.restore();
-  return `打撃 ${n}箇所 / 内出血 ${nb}箇所`;
 }
 
+function bruise(x,y,br,a){
+  ctx.save();
+  ctx.globalCompositeOperation="multiply";
+  let g=ctx.createRadialGradient(x,y,0,x,y,br);
+  g.addColorStop(0,   `rgba(130,45,85,${a})`);
+  g.addColorStop(0.55,`rgba(150,60,60,${a*0.6})`);
+  g.addColorStop(0.8, `rgba(160,150,70,${a*0.35})`);
+  g.addColorStop(1,   "rgba(160,150,70,0)");
+  ctx.fillStyle=g;
+  ctx.beginPath(); ctx.arc(x,y,br,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+  // swelling shine
+  ctx.save();
+  ctx.globalCompositeOperation="screen";
+  g=ctx.createRadialGradient(x-br*0.25,y-br*0.3,0,x-br*0.25,y-br*0.3,br*0.5);
+  g.addColorStop(0,"rgba(255,235,220,0.28)");
+  g.addColorStop(1,"rgba(255,235,220,0)");
+  ctx.fillStyle=g;
+  ctx.beginPath(); ctx.arc(x-br*0.25,y-br*0.3,br*0.5,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+function fxLump(k){
+  const s=k/5;
+  const faceW=dist(P(234),P(454));
+  const chin=P(152), tip=P(1);
+  const lCheek=mid(P(234),P(61)), rCheek=mid(P(454),P(291));
+  const forehead=mid(P(10),P(168));
+  const lumps=[lCheek, rCheek, forehead, {x:chin.x, y:chin.y-faceW*0.06}];
+  const warps=[];
+  for(const a of lumps){
+    warps.push({cx:a.x+(Math.random()-0.5)*faceW*0.05,
+                cy:a.y+(Math.random()-0.5)*faceW*0.05,
+                r:faceW*(0.15+Math.random()*0.06),
+                type:"bulge", strength:0.45+0.07*k});
+  }
+  // swollen lips
+  const mo=mid(P(61),P(291));
+  warps.push({cx:mo.x, cy:mo.y, r:faceW*0.16, type:"bulge", strength:0.35+0.06*k});
+  // chin skew
+  warps.push({cx:chin.x, cy:chin.y-faceW*0.05, r:faceW*0.30, type:"shift",
+              dx:faceW*0.05*s*(Math.random()<0.5?-1:1), dy:0, strength:0.9});
+  const img=ctx.getImageData(0,0,canvas.width,canvas.height);
+  ctx.putImageData(applyWarps(img,warps),0,0);
+
+  const nb=2+Math.ceil(k/2);
+  for(let i=0;i<nb;i++){
+    const a=lumps[i%lumps.length];
+    bruise(a.x+(Math.random()-0.5)*faceW*0.06,
+           a.y+(Math.random()-0.5)*faceW*0.06,
+           faceW*(0.10+Math.random()*0.05), 0.22+0.05*k);
+  }
+  if(k>=2){
+    const eye=Math.random()<0.5?P(145):P(374);
+    bruise(eye.x, eye.y+faceW*0.045, faceW*0.09, 0.30+0.05*k);
+  }
+  bruise(tip.x, tip.y, faceW*0.07, 0.25);
+  let extra="";
+  if(k>=3){
+    const spot={x:forehead.x+faceW*0.10, y:forehead.y};
+    drawPlaster(spot.x,spot.y,faceW*0.16, Math.PI/4);
+    drawPlaster(spot.x,spot.y,faceW*0.16,-Math.PI/4);
+    extra=" / 絆創膏";
+  }
+  return `打撃${warps.length-1}箇所 / 内出血${nb+(k>=2?2:1)}箇所${extra}`;
+}
+
+/* ===== 懲役30年の刑: たるみ+頬こけ+眉下がり+皺(顔内クリップ)+シミ ===== */
 function fxAge(k){
   const s=k/5;
   const faceW=dist(P(234),P(454));
-  const chin=P(152);
+  const chin=P(152), tip=P(1);
+  const eyeY=(P(33).y+P(263).y)/2;
   const warps=[];
   // jowl sag
   for(const side of [P(234),P(454)]){
-    const jx=side.x+(chin.x-side.x)*0.45;
-    const jy=side.y+(chin.y-side.y)*0.55;
-    warps.push({cx:jx, cy:jy, r:faceW*0.22, type:"shift",
-      dx:0, dy:faceW*0.10*s, strength:0.9});
+    warps.push({cx:side.x+(chin.x-side.x)*0.40,
+                cy:side.y+(chin.y-side.y)*0.55,
+                r:faceW*0.24, type:"shift", dx:0, dy:faceW*0.13*s, strength:0.95});
   }
   // under-eye bags
   for(const eye of [P(145),P(374)]){
-    warps.push({cx:eye.x, cy:eye.y+faceW*0.06, r:faceW*0.10,
-      type:"shift", dx:0, dy:faceW*0.035*s, strength:0.8});
+    warps.push({cx:eye.x, cy:eye.y+faceW*0.055, r:faceW*0.10,
+                type:"shift", dx:0, dy:faceW*0.045*s, strength:0.85});
   }
-  let img=ctx.getImageData(0,0,canvas.width,canvas.height);
-  img=applyWarps(img,warps);
-  // desaturate face ellipse (soft mask)
-  const xs=lm.map(p=>p.x), ys=lm.map(p=>p.y);
-  const fx0=Math.min(...xs), fx1=Math.max(...xs);
-  const fy0=Math.min(...ys), fy1=Math.max(...ys);
-  const fcx=(fx0+fx1)/2, fcy=(fy0+fy1)/2;
-  const frx=(fx1-fx0)*0.62, fry=(fy1-fy0)*0.68;
-  const amt=0.30+0.10*s;
+  // sunken cheeks (negative bulge = pinch)
+  for(const c of [mid(P(234),P(61)), mid(P(454),P(291))]){
+    warps.push({cx:c.x, cy:c.y, r:faceW*0.13, type:"bulge", strength:-0.22*s});
+  }
+  // brow droop
+  for(const e of [P(33),P(263)]){
+    warps.push({cx:e.x, cy:e.y-faceW*0.07, r:faceW*0.11,
+                type:"shift", dx:0, dy:faceW*0.035*s, strength:0.8});
+  }
+  let img=applyWarps(ctx.getImageData(0,0,canvas.width,canvas.height), warps);
+
+  // desaturate + yellow tint inside the face ellipse
+  const {fcx,fcy,frx,fry}=faceEllipse();
+  const amt=0.35+0.15*s;
   const d=img.data, w=img.width;
   const yA=Math.max(0,Math.floor(fcy-fry)), yB=Math.min(img.height-1,Math.ceil(fcy+fry));
   const xA=Math.max(0,Math.floor(fcx-frx)), xB=Math.min(w-1,Math.ceil(fcx+frx));
@@ -497,53 +596,87 @@ function fxAge(k){
       const nx=(x-fcx)/frx, ny=(y-fcy)/fry;
       const dd=nx*nx+ny*ny;
       if(dd>1) continue;
-      const m=amt*(1-dd*dd); // soft edge
+      const m=amt*(1-dd*dd);
       const i=(y*w+x)*4;
       const lum=d[i]*0.299+d[i+1]*0.587+d[i+2]*0.114;
-      d[i]  =d[i]  +(lum*1.02-d[i]) *m;
-      d[i+1]=d[i+1]+(lum*0.98-d[i+1])*m;
-      d[i+2]=d[i+2]+(lum*0.88-d[i+2])*m;
+      d[i]  += (lum*1.05-d[i])  *m;
+      d[i+1]+= (lum*1.00-d[i+1])*m;
+      d[i+2]+= (lum*0.84-d[i+2])*m;
     }
   }
   ctx.putImageData(img,0,0);
-  // wrinkles
-  ctx.save();
-  ctx.strokeStyle=`rgba(60,42,30,${0.16+0.05*k})`;
-  ctx.lineWidth=Math.max(1,canvas.width*0.0035);
-  ctx.lineCap="round";
-  const l33=P(33), r263=P(263), nas=P(168), fh=P(10);
-  // forehead lines
-  for(let i=1;i<=3;i++){
-    const yy=fh.y+(nas.y-fh.y)*(i*0.22);
-    ctx.beginPath();
-    ctx.moveTo(l33.x, yy);
-    ctx.quadraticCurveTo((l33.x+r263.x)/2, yy-faceW*0.03, r263.x, yy);
-    ctx.stroke();
+
+  // wrinkle layer (offscreen, clipped to face)
+  const wl=document.createElement("canvas");
+  wl.width=canvas.width; wl.height=canvas.height;
+  const w2=wl.getContext("2d");
+  w2.save();
+  w2.beginPath();
+  w2.ellipse(fcx,fcy,frx*0.94,fry*0.94,0,0,Math.PI*2);
+  w2.clip();
+
+  const lw=Math.max(1.2, canvas.width*0.0032);
+  const line=(x1,y1,cx,cy,x2,y2)=>{
+    w2.lineCap="round";
+    w2.strokeStyle="rgba(75,52,38,0.55)"; w2.lineWidth=lw;
+    w2.beginPath(); w2.moveTo(x1,y1); w2.quadraticCurveTo(cx,cy,x2,y2); w2.stroke();
+    w2.strokeStyle="rgba(255,238,218,0.40)"; w2.lineWidth=lw*0.8;
+    w2.beginPath(); w2.moveTo(x1,y1+lw); w2.quadraticCurveTo(cx,cy+lw,x2,y2+lw); w2.stroke();
+  };
+  // forehead lines: kept between hairline and brow, curved with the forehead
+  const browY=eyeY-faceW*0.10;
+  const topY=P(10).y+(browY-P(10).y)*0.35;
+  const lx=P(33).x+faceW*0.02, rx2=P(263).x-faceW*0.02;
+  for(let i=0;i<3;i++){
+    const yy=topY+(browY-topY)*(i/2.6);
+    line(lx,yy,(lx+rx2)/2, yy-faceW*0.035, rx2,yy);
   }
   // crow's feet
-  for(const [eye,sgn] of [[l33,-1],[r263,1]]){
+  for(const [e,sgn] of [[P(33),-1],[P(263),1]]){
     for(let i=0;i<3;i++){
-      ctx.beginPath();
-      ctx.moveTo(eye.x+sgn*faceW*0.02, eye.y);
-      ctx.lineTo(eye.x+sgn*faceW*0.10, eye.y+(i-1)*faceW*0.035);
-      ctx.stroke();
+      const x1=e.x+sgn*faceW*0.015, y1=e.y;
+      const x2=e.x+sgn*faceW*0.09,  y2=e.y+(i-1)*faceW*0.05;
+      line(x1,y1,(x1+x2)/2+sgn*faceW*0.01,(y1+y2)/2, x2,y2);
     }
   }
   // nasolabial + marionette
-  const tip=P(1), lmo=P(61), rmo=P(291);
-  for(const [mo,sgn] of [[lmo,-1],[rmo,1]]){
-    const wing={x:tip.x+sgn*faceW*0.09, y:tip.y+faceW*0.01};
-    ctx.beginPath();
-    ctx.moveTo(wing.x,wing.y);
-    ctx.quadraticCurveTo(mo.x+sgn*faceW*0.05, (wing.y+mo.y)/2, mo.x, mo.y);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(mo.x,mo.y);
-    ctx.lineTo(mo.x+sgn*faceW*0.015, mo.y+faceW*0.10);
-    ctx.stroke();
+  for(const [mo,sgn] of [[P(61),-1],[P(291),1]]){
+    const wing={x:tip.x+sgn*faceW*0.085, y:tip.y+faceW*0.015};
+    line(wing.x,wing.y, mo.x+sgn*faceW*0.06,(wing.y+mo.y)/2, mo.x+sgn*faceW*0.01, mo.y+faceW*0.01);
+    line(mo.x,mo.y+faceW*0.01, mo.x+sgn*faceW*0.02, mo.y+faceW*0.06,
+         mo.x+sgn*faceW*0.01, mo.y+faceW*0.11);
   }
+  // under-eye shading
+  for(const eye of [P(145),P(374)]){
+    const g=w2.createRadialGradient(eye.x,eye.y+faceW*0.05,0,
+                                    eye.x,eye.y+faceW*0.05,faceW*0.09);
+    g.addColorStop(0,"rgba(90,60,70,0.30)");
+    g.addColorStop(1,"rgba(90,60,70,0)");
+    w2.fillStyle=g;
+    w2.beginPath(); w2.arc(eye.x,eye.y+faceW*0.05,faceW*0.09,0,Math.PI*2); w2.fill();
+  }
+  // age spots (kept away from the eye band)
+  const ns=5+2*k;
+  let spots=0;
+  for(let i=0;i<ns;i++){
+    const a=Math.random()*Math.PI*2, rr2=Math.sqrt(Math.random());
+    const x=fcx+Math.cos(a)*frx*0.7*rr2, y=fcy+Math.sin(a)*fry*0.7*rr2;
+    if(y>eyeY-faceW*0.16 && y<eyeY+faceW*0.05) continue;
+    w2.fillStyle=`rgba(125,85,55,${0.15+Math.random()*0.15})`;
+    w2.beginPath();
+    w2.arc(x,y,faceW*(0.008+Math.random()*0.012),0,Math.PI*2);
+    w2.fill();
+    spots++;
+  }
+  w2.restore();
+
+  // soft composite
+  ctx.save();
+  ctx.globalAlpha=0.5+0.1*k;
+  try{ ctx.filter="blur(0.8px)"; }catch(e){}
+  ctx.drawImage(wl,0,0);
   ctx.restore();
-  return `懲役${k*6}年分 老化`;
+  return `懲役${k*6}年分 老化 (シミ${spots}個)`;
 }
 
 /* ---------- apply / reset / save ---------- */
@@ -606,7 +739,7 @@ $("btnSave").onclick=()=>{
   },"image/png");
 };
 
-log("v0.1.0 起動完了。カメラ起動 or 写真選択で開始");
+log("v0.2.0 起動完了。カメラ起動 or 写真選択で開始");
 </script>
 </body>
 </html>
